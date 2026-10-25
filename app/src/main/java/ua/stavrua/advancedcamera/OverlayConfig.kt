@@ -17,7 +17,7 @@ enum class OverlayField(val title: String, val group: String, val enabledByDefau
     LENS("Lens and 35 mm equivalent focal length", "Camera", true),
     RESOLUTION("Image resolution and megapixels", "Camera", true),
     ASPECT("Image aspect ratio", "Camera", true),
-    FILE_FORMAT("File format and JPEG quality", "Camera", true),
+    FILE_FORMAT("File format and image quality", "Camera", true),
     COLOR_SPACE("Image color space", "Camera", true),
     WHITE_BALANCE("White balance / Kelvin", "Camera", true),
     FOCUS("Focus mode", "Camera", true),

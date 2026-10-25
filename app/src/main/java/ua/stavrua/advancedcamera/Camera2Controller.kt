@@ -6,6 +6,9 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
 import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Rect
@@ -302,7 +305,16 @@ class Camera2Controller(
                     if (needsRaw) addTarget(rawReader?.surface ?: throw IllegalStateException("RAW output is unavailable."))
                     pendingImageOrientation = jpegOrientation(option.characteristics)
                     set(CaptureRequest.JPEG_ORIENTATION, pendingImageOrientation)
-                    set(CaptureRequest.JPEG_QUALITY, 96.toByte())
+                    val needsPostProcessing = settings.watermarkEnabled ||
+                        settings.format == FileFormat.PNG ||
+                        settings.format == FileFormat.HEIC ||
+                        settings.contrast != 1f ||
+                        settings.saturation != 1f ||
+                        settings.aspectRatio != AspectRatioChoice.FULL
+                    set(
+                        CaptureRequest.JPEG_QUALITY,
+                        (if (needsPostProcessing) 100 else settings.imageQuality).coerceIn(5, 100).toByte(),
+                    )
                     applyControls(this, option, settings, still = true)
                 }
                 session.capture(builder.build(), object : CameraCaptureSession.CaptureCallback() {
@@ -662,13 +674,26 @@ class Camera2Controller(
                 val needsCrop = savesJpeg && settings.aspectRatio.ratio?.let { requested ->
                     jpegAspectDiffers(jpegBytes, requested)
                 } == true
-                if (savesJpeg && (settings.watermarkEnabled || format == FileFormat.PNG || needsCrop)) {
+                if (
+                    savesJpeg &&
+                    (settings.watermarkEnabled || format == FileFormat.PNG || format == FileFormat.HEIC ||
+                        settings.contrast != 1f || settings.saturation != 1f || needsCrop)
+                ) {
                     outputBitmap = prepareOutputBitmap(jpegBytes, metadata, settings)
                 }
                 fun saveBitmap(imageFormat: FileFormat, suffix: String = "") {
-                    val mime = if (imageFormat == FileFormat.PNG) "image/png" else "image/jpeg"
+                    val mime = when (imageFormat) {
+                        FileFormat.PNG -> "image/png"
+                        FileFormat.HEIC -> "image/heic"
+                        else -> "image/jpeg"
+                    }
+                    val extension = when (imageFormat) {
+                        FileFormat.PNG -> "png"
+                        FileFormat.HEIC -> "heic"
+                        else -> "jpg"
+                    }
                     writeToMediaStore(
-                        "${fileBaseName(option)}_${stamp}${suffix}.${if (imageFormat == FileFormat.PNG) "png" else "jpg"}",
+                        "${fileBaseName(option)}_${stamp}${suffix}.$extension",
                         mime,
                     ) { stream ->
                         if (imageFormat == FileFormat.JPEG && outputBitmap == null) {
@@ -676,8 +701,12 @@ class Camera2Controller(
                         } else {
                             val bitmap = outputBitmap
                                 ?: throw IllegalStateException("Image processing did not produce a bitmap.")
-                            val quality = if (imageFormat == FileFormat.PNG) 100 else 96
-                            val compressFormat = if (imageFormat == FileFormat.PNG) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+                            val quality = if (imageFormat == FileFormat.PNG) 100 else settings.imageQuality
+                            val compressFormat = when (imageFormat) {
+                                FileFormat.PNG -> Bitmap.CompressFormat.PNG
+                                FileFormat.HEIC -> Bitmap.CompressFormat.HEIC
+                                else -> Bitmap.CompressFormat.JPEG
+                            }
                             check(bitmap.compress(compressFormat, quality, stream)) { "Bitmap encoding failed." }
                         }
                     }
@@ -744,9 +773,35 @@ class Camera2Controller(
         }
         val cropped = settings.aspectRatio.ratio?.let { cropToAspect(oriented, it) } ?: oriented
         if (cropped !== oriented) oriented.recycle()
-        return if (settings.watermarkEnabled) {
-            WatermarkRenderer.draw(cropped, metadata, settings, overlayConfigProvider()).also { cropped.recycle() }
+        val processed = if (settings.contrast != 1f || settings.saturation != 1f) {
+            applyImageAdjustments(cropped, settings).also { cropped.recycle() }
         } else cropped
+        return if (settings.watermarkEnabled) {
+            WatermarkRenderer.draw(processed, metadata, settings, overlayConfigProvider()).also { processed.recycle() }
+        } else processed
+    }
+
+    private fun applyImageAdjustments(source: Bitmap, settings: CameraSettings): Bitmap {
+        val adjusted = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+        val saturation = ColorMatrix().apply { setSaturation(settings.saturation.coerceIn(0f, 2f)) }
+        val contrast = settings.contrast.coerceIn(0.5f, 1.5f)
+        val offset = 128f * (1f - contrast)
+        val contrastMatrix = ColorMatrix(
+            floatArrayOf(
+                contrast, 0f, 0f, 0f, offset,
+                0f, contrast, 0f, 0f, offset,
+                0f, 0f, contrast, 0f, offset,
+                0f, 0f, 0f, 1f, 0f,
+            ),
+        )
+        saturation.postConcat(contrastMatrix)
+        android.graphics.Canvas(adjusted).drawBitmap(
+            source,
+            0f,
+            0f,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { colorFilter = ColorMatrixColorFilter(saturation) },
+        )
+        return adjusted
     }
 
     private fun cropToAspect(source: Bitmap, targetRatio: Float): Bitmap {

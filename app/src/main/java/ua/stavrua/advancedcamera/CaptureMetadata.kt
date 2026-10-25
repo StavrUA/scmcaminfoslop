@@ -119,7 +119,8 @@ object MetadataCollector {
             else -> "Fixed focus"
         }
         val activeFormat = when (settings.format) {
-            FileFormat.JPEG -> "JPEG 96%"
+            FileFormat.JPEG -> "JPEG ${settings.imageQuality}%"
+            FileFormat.HEIC -> "HEIC ${settings.imageQuality}%"
             FileFormat.PNG -> "PNG"
             FileFormat.DNG -> if (settings.watermarkEnabled) "DNG + stamped JPEG" else "DNG"
             FileFormat.RAW_JPEG -> "RAW + JPEG"

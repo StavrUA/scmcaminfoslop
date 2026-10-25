@@ -50,6 +50,7 @@ enum class AspectRatioChoice(val title: String, val ratio: Float?) {
 
 enum class FileFormat(val title: String) {
     JPEG("JPEG"),
+    HEIC("HEIC"),
     PNG("PNG"),
     DNG("RAW (DNG)"),
     RAW_JPEG("RAW + JPEG"),
@@ -86,6 +87,9 @@ data class CameraSettings(
     val whiteBalance: WhiteBalance = WhiteBalance.AUTO,
     val kelvin: Int = 5500,
     val format: FileFormat = FileFormat.JPEG,
+    val imageQuality: Int = 96,
+    val contrast: Float = 1f,
+    val saturation: Float = 1f,
     val aspectRatio: AspectRatioChoice = AspectRatioChoice.RATIO_4_3,
     val selectedSize: Size? = null,
     val zoom: Float = 1f,

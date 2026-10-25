@@ -207,6 +207,8 @@ fun CameraScreen() {
     var showOverlayFields by remember { mutableStateOf(false) }
     var previewGrid by remember { mutableStateOf(PreviewGrid.OFF) }
     var showLevelGuide by remember { mutableStateOf(true) }
+    var showProControls by remember { mutableStateOf(false) }
+    var showImageAdjustments by remember { mutableStateOf(false) }
     val currentZoom by rememberUpdatedState(settings.zoom)
     val maximumZoom by rememberUpdatedState(camera?.maxDigitalZoom ?: 1f)
 
@@ -236,13 +238,15 @@ fun CameraScreen() {
         CameraPreview(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.48f)
-                .clip(RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)),
+                .weight(0.56f)
+                .clip(RoundedCornerShape(bottomStart = 22.dp, bottomEnd = 22.dp)),
             controller = controller,
             ready = ui.isReady,
             grid = previewGrid,
             rollRadians = orientation?.getOrNull(2),
             showLevelGuide = showLevelGuide,
+            capturing = ui.isCapturing,
+            onCapture = controller::capture,
             onPinchZoom = { scale ->
                 if (maximumZoom > 1f) {
                     controller.setZoom((currentZoom * scale).coerceIn(1f, maximumZoom))
@@ -252,7 +256,9 @@ fun CameraScreen() {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(0.52f)
+                .weight(0.44f)
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(MaterialTheme.colorScheme.surface)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(9.dp),
@@ -351,7 +357,10 @@ fun CameraScreen() {
                     label = "Format",
                     selected = settings.format.title,
                     options = FileFormat.entries
-                        .filter { it == FileFormat.JPEG || it == FileFormat.PNG || camera?.supportsRaw == true }
+                        .filter {
+                            it == FileFormat.JPEG || it == FileFormat.HEIC || it == FileFormat.PNG ||
+                                camera?.supportsRaw == true
+                        }
                         .map { it.title to it.name },
                     modifier = Modifier.weight(1f),
                     onSelect = { controller.updateSettings(settings.copy(format = FileFormat.valueOf(it))) },
@@ -376,9 +385,69 @@ fun CameraScreen() {
                     color = MaterialTheme.colorScheme.secondary,
                 )
             }
+            if (
+                settings.format == FileFormat.JPEG || settings.format == FileFormat.HEIC ||
+                settings.format == FileFormat.RAW_JPEG || (settings.format == FileFormat.DNG && settings.watermarkEnabled)
+            ) {
+                ValueSlider(
+                    "Image quality",
+                    settings.imageQuality.toFloat(),
+                    5f,
+                    100f,
+                    "${settings.imageQuality}%",
+                    { controller.updateSettings(settings.copy(imageQuality = it.roundToInt().coerceIn(5, 100))) },
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { showImageAdjustments = !showImageAdjustments },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (showImageAdjustments) "Hide image processing" else "Image processing · ${if (settings.contrast == 1f && settings.saturation == 1f) "Off" else "Custom"}",
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (showImageAdjustments) {
+                Text("Adjustments are applied to saved JPEG/HEIC/PNG images. RAW DNG stays untouched.", style = MaterialTheme.typography.bodySmall)
+                ValueSlider(
+                    "Contrast",
+                    settings.contrast,
+                    0.5f,
+                    1.5f,
+                    "%.2fx".format(settings.contrast),
+                    { controller.updateSettings(settings.copy(contrast = it)) },
+                )
+                ValueSlider(
+                    "Saturation",
+                    settings.saturation,
+                    0f,
+                    2f,
+                    "%.2fx".format(settings.saturation),
+                    { controller.updateSettings(settings.copy(saturation = it)) },
+                )
+                Text(
+                    "Contrast %.2fx · Saturation %.2fx".format(settings.contrast, settings.saturation),
+                    modifier = Modifier.clickable {
+                        controller.updateSettings(settings.copy(contrast = 1f, saturation = 1f))
+                    },
+                    color = MaterialTheme.colorScheme.secondary,
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
             HorizontalDivider()
-            Text("PRO CONTROLS", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-            if (camera != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable { showProControls = !showProControls },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (showProControls) "Hide Pro controls" else "Pro controls",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (showProControls && camera != null) {
                 SettingToggle(
                     title = "Manual exposure",
                     subtitle = "ISO + shutter override automatic exposure",
@@ -593,31 +662,6 @@ fun CameraScreen() {
             ui.notice?.let {
                 Text(it, color = MaterialTheme.colorScheme.secondary, style = MaterialTheme.typography.bodySmall)
             }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Button(
-                    onClick = controller::capture,
-                    enabled = ui.isReady && !ui.isCapturing,
-                    modifier = Modifier.size(76.dp),
-                    shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                ) {
-                    Text(if (ui.isCapturing) "…" else "●", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onPrimary)
-                }
-                Spacer(Modifier.width(16.dp))
-                Text(
-                    when {
-                        !hasCameraPermission -> "Camera permission needed"
-                        ui.isCapturing -> "Saving…"
-                        ui.isReady -> "Tap shutter to capture"
-                        else -> "Starting camera…"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
         }
     }
 }
@@ -630,6 +674,8 @@ private fun CameraPreview(
     grid: PreviewGrid,
     rollRadians: Float?,
     showLevelGuide: Boolean,
+    capturing: Boolean,
+    onCapture: () -> Unit,
     onPinchZoom: (Float) -> Unit,
 ) {
     val latestPinchZoom by rememberUpdatedState(onPinchZoom)
@@ -714,6 +760,15 @@ private fun CameraPreview(
             shape = RoundedCornerShape(6.dp),
         ) {
             Text("Tap preview to focus", modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp), style = MaterialTheme.typography.labelSmall)
+        }
+        Button(
+            onClick = onCapture,
+            enabled = ready && !capturing,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp).size(70.dp),
+            shape = CircleShape,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+        ) {
+            Text(if (capturing) "…" else "●", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onPrimary)
         }
     }
 }
