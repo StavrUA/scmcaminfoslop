@@ -75,6 +75,8 @@ class Camera2Controller(
     private var pendingNeedsRaw = false
     private var pendingImageOrientation = 0
     private var captureGeneration = 0
+    private var captureCountdownTask: Runnable? = null
+    private var captureScheduled = false
     private var closed = false
 
     fun refreshCameras() {
@@ -136,6 +138,8 @@ class Camera2Controller(
         val prior = state.settings
         val compatibleSettings = if (nextCamera == null) prior else prior.copy(
             selectedSize = null,
+            zoom = prior.zoom.coerceIn(1f, nextCamera.maxDigitalZoom),
+            flashMode = if (nextCamera.flashAvailable) prior.flashMode else FlashMode.OFF,
             format = if (prior.format == FileFormat.DNG || prior.format == FileFormat.RAW_JPEG) {
                 if (nextCamera.supportsRaw) prior.format else FileFormat.JPEG
             } else prior.format,
@@ -165,7 +169,12 @@ class Camera2Controller(
         val option = selectedOption()
         val available = option?.sizesFor(settings.aspectRatio).orEmpty()
         val selectedSize = settings.selectedSize?.takeIf { it in available } ?: available.firstOrNull()
-        val updatedSettings = settings.copy(selectedSize = selectedSize)
+        val flashMode = if (option?.flashAvailable == true && !settings.manualExposure) settings.flashMode else FlashMode.OFF
+        val updatedSettings = settings.copy(
+            selectedSize = selectedSize,
+            zoom = settings.zoom.coerceIn(1f, option?.maxDigitalZoom ?: 1f),
+            flashMode = flashMode,
+        )
         updateState { it.copy(settings = updatedSettings) }
         cameraHandler.post { updateRepeatingRequest() }
         if (updatedSettings.selectedSize != oldSettings.selectedSize ||
@@ -185,14 +194,15 @@ class Camera2Controller(
         }
         val nx = (x / width.coerceAtLeast(1)).coerceIn(0f, 1f)
         val ny = (y / height.coerceAtLeast(1)).coerceIn(0f, 1f)
-        val sensorX = active.left + (active.width() * nx).toInt()
-        val sensorY = active.top + (active.height() * ny).toInt()
-        val half = (active.width() * 0.06f).toInt().coerceAtLeast(20)
+        val crop = zoomCropRegion(active, state.settings.zoom)
+        val sensorX = crop.left + (crop.width() * nx).toInt()
+        val sensorY = crop.top + (crop.height() * ny).toInt()
+        val half = (crop.width() * 0.06f).toInt().coerceAtLeast(20)
         val rect = Rect(
-            (sensorX - half).coerceAtLeast(active.left),
-            (sensorY - half).coerceAtLeast(active.top),
-            (sensorX + half).coerceAtMost(active.right),
-            (sensorY + half).coerceAtMost(active.bottom),
+            (sensorX - half).coerceAtLeast(crop.left),
+            (sensorY - half).coerceAtLeast(crop.top),
+            (sensorX + half).coerceAtMost(crop.right),
+            (sensorY + half).coerceAtMost(crop.bottom),
         )
         cameraHandler.post {
             try {
@@ -222,7 +232,41 @@ class Camera2Controller(
     }
 
     fun capture() {
-        if (!state.isReady || state.isCapturing) return
+        if (!state.isReady || state.isCapturing || captureScheduled) return
+        val delaySeconds = state.settings.captureTimerSeconds.coerceIn(0, 10)
+        if (delaySeconds > 0) {
+            captureScheduled = true
+            updateState { it.copy(isCapturing = true, error = null, notice = "Photo in $delaySeconds…") }
+            cameraHandler.post {
+                var remaining = delaySeconds
+                lateinit var task: Runnable
+                task = Runnable {
+                    if (closed || !captureScheduled) return@Runnable
+                    remaining--
+                    if (remaining <= 0) {
+                        captureCountdownTask = null
+                        captureScheduled = false
+                        updateState { it.copy(isCapturing = false, notice = null) }
+                        captureNow()
+                    } else {
+                        updateState { it.copy(notice = "Photo in $remaining…") }
+                        cameraHandler.postDelayed(task, 1_000)
+                    }
+                }
+                captureCountdownTask = task
+                cameraHandler.postDelayed(task, 1_000)
+            }
+            return
+        }
+        captureNow()
+    }
+
+    private fun captureNow() {
+        if (!state.isReady) {
+            captureScheduled = false
+            updateState { it.copy(isCapturing = false, error = "Camera is not ready.") }
+            return
+        }
         val option = selectedOption()
         if (option == null) {
             showError("No camera is selected.")
@@ -321,6 +365,9 @@ class Camera2Controller(
 
     fun close() {
         closed = true
+        captureScheduled = false
+        captureCountdownTask?.let(cameraHandler::removeCallbacks)
+        captureCountdownTask = null
         closeCamera()
         thread.quitSafely()
     }
@@ -494,6 +541,12 @@ class Camera2Controller(
         val manual = settings.manualExposure && option.manualSensor
         val isoRange = option.isoRange
         val exposureTimeRange = option.exposureTimeRange
+        val flashMode = if (still && option.flashAvailable && !manual) settings.flashMode else FlashMode.OFF
+        val aeMode = when (flashMode) {
+            FlashMode.AUTO -> CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH
+            FlashMode.ON -> CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH
+            FlashMode.OFF -> CaptureRequest.CONTROL_AE_MODE_ON
+        }
         builder.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
         builder.set(CaptureRequest.CONTROL_AF_MODE, when {
             settings.manualFocus && option.manualFocus -> CaptureRequest.CONTROL_AF_MODE_OFF
@@ -507,12 +560,16 @@ class Camera2Controller(
                 settings.shutterNanos.coerceIn(exposureTimeRange.lower, exposureTimeRange.upper),
             )
         } else {
-            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+            builder.set(CaptureRequest.CONTROL_AE_MODE, aeMode)
             builder.set(
                 CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,
                 settings.exposureCompensation.coerceIn(evRange.lower, evRange.upper),
             )
         }
+        option.characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)?.let { active ->
+            builder.set(CaptureRequest.SCALER_CROP_REGION, zoomCropRegion(active, settings.zoom))
+        }
+        if (option.flashAvailable) builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
         if (settings.manualFocus && option.manualFocus) {
             builder.set(CaptureRequest.LENS_FOCUS_DISTANCE, settings.focusDistance.coerceIn(0f, option.maxFocusDistance))
         }
@@ -546,6 +603,15 @@ class Camera2Controller(
         val red = if (t <= 66) 255f else (329.698727446 * Math.pow(t - 60.0, -0.1332047592)).toFloat()
         val blue = if (t >= 66) 255f else (if (t <= 19) 0.0 else 138.5177312231 * Math.log(t - 10.0) - 305.0447927307).toFloat()
         return floatArrayOf((255f / red.coerceAtLeast(1f)).coerceIn(1f, 2.5f), (255f / blue.coerceAtLeast(1f)).coerceIn(1f, 2.5f))
+    }
+
+    private fun zoomCropRegion(active: Rect, requestedZoom: Float): Rect {
+        val zoom = requestedZoom.coerceIn(1f, selectedOption()?.maxDigitalZoom ?: 1f)
+        val width = (active.width() / zoom).toInt().coerceAtLeast(1)
+        val height = (active.height() / zoom).toInt().coerceAtLeast(1)
+        val left = active.left + (active.width() - width) / 2
+        val top = active.top + (active.height() - height) / 2
+        return Rect(left, top, left + width, top + height)
     }
 
     private fun finalizeCaptureIfReady() {
@@ -778,6 +844,9 @@ class Camera2Controller(
     }
 
     private fun failCapture(message: String) {
+        captureScheduled = false
+        captureCountdownTask?.let(cameraHandler::removeCallbacks)
+        captureCountdownTask = null
         pendingJpeg?.close()
         pendingRaw?.close()
         pendingJpeg = null

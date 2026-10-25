@@ -16,6 +16,7 @@ import android.view.SurfaceView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -61,12 +62,15 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlin.math.roundToInt
@@ -98,6 +102,25 @@ fun CameraScreen() {
             ambientTemperatureProvider = { latestAmbientTemperature },
             displayRotationProvider = { context.activityDisplayRotation() },
         )
+        if (grid != PreviewGrid.OFF) {
+            Canvas(Modifier.fillMaxSize()) {
+                val color = Color.White.copy(alpha = 0.72f)
+                val strokeWidth = 1.dp.toPx()
+                if (grid == PreviewGrid.THIRDS) {
+                    val verticalStep = size.width / 3f
+                    val horizontalStep = size.height / 3f
+                    for (index in 1..2) {
+                        drawLine(color, Offset(verticalStep * index, 0f), Offset(verticalStep * index, size.height), strokeWidth)
+                        drawLine(color, Offset(0f, horizontalStep * index), Offset(size.width, horizontalStep * index), strokeWidth)
+                    }
+                } else {
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val arm = 20.dp.toPx()
+                    drawLine(color, Offset(center.x - arm, center.y), Offset(center.x + arm, center.y), strokeWidth, cap = StrokeCap.Round)
+                    drawLine(color, Offset(center.x, center.y - arm), Offset(center.x, center.y + arm), strokeWidth, cap = StrokeCap.Round)
+                }
+            }
+        }
     }
     val cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     var hasCameraPermission by remember { mutableStateOf(cameraGranted) }
@@ -199,6 +222,7 @@ fun CameraScreen() {
     val camera = ui.cameras.firstOrNull { "${it.openCameraId}:${it.physicalCameraId ?: "logical"}" == ui.selectedCameraId }
     val settings = ui.settings
     var showOverlayFields by remember { mutableStateOf(false) }
+    var previewGrid by remember { mutableStateOf(PreviewGrid.OFF) }
 
     fun saveOverlayConfig(updated: OverlayConfig) {
         try {
@@ -230,6 +254,7 @@ fun CameraScreen() {
                 .clip(RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)),
             controller = controller,
             ready = ui.isReady,
+            grid = previewGrid,
         )
         Column(
             modifier = Modifier
@@ -268,6 +293,50 @@ fun CameraScreen() {
                 options = ui.cameras.map { it.lensDescription() to "${it.openCameraId}:${it.physicalCameraId ?: "logical"}" },
                 onSelect = controller::selectCamera,
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DropdownField(
+                    label = "Flash",
+                    selected = if (camera?.flashAvailable == true) settings.flashMode.title else "Unavailable",
+                    options = if (camera?.flashAvailable == true) {
+                        FlashMode.entries.map { it.title to it.name }
+                    } else emptyList(),
+                    modifier = Modifier.weight(1f),
+                    onSelect = { mode ->
+                        controller.updateSettings(
+                            settings.copy(
+                                flashMode = FlashMode.valueOf(mode),
+                                manualExposure = false,
+                            ),
+                        )
+                    },
+                )
+                DropdownField(
+                    label = "Timer",
+                    selected = if (settings.captureTimerSeconds == 0) "Off" else "${settings.captureTimerSeconds} sec",
+                    options = listOf("Off" to "0", "3 sec" to "3", "5 sec" to "5", "10 sec" to "10"),
+                    modifier = Modifier.weight(1f),
+                    onSelect = { seconds ->
+                        controller.updateSettings(settings.copy(captureTimerSeconds = seconds.toInt()))
+                    },
+                )
+                DropdownField(
+                    label = "Grid",
+                    selected = previewGrid.title,
+                    options = PreviewGrid.entries.map { it.title to it.name },
+                    modifier = Modifier.weight(1f),
+                    onSelect = { previewGrid = PreviewGrid.valueOf(it) },
+                )
+            }
+            if (camera != null && camera.maxDigitalZoom > 1f) {
+                ValueSlider(
+                    "Zoom",
+                    settings.zoom,
+                    1f,
+                    camera.maxDigitalZoom,
+                    "%.1fx".format(settings.zoom),
+                    { controller.updateSettings(settings.copy(zoom = it)) },
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DropdownField(
                     label = "Aspect",
@@ -315,7 +384,14 @@ fun CameraScreen() {
                     subtitle = "ISO + shutter override automatic exposure",
                     checked = settings.manualExposure && camera.manualSensor,
                     enabled = camera.manualSensor,
-                    onCheckedChange = { controller.updateSettings(settings.copy(manualExposure = it)) },
+                    onCheckedChange = {
+                        controller.updateSettings(
+                            settings.copy(
+                                manualExposure = it,
+                                flashMode = if (it) FlashMode.OFF else settings.flashMode,
+                            ),
+                        )
+                    },
                 )
                 if (settings.manualExposure && camera.manualSensor) {
                     val isoRange = camera.isoRange
@@ -547,7 +623,7 @@ fun CameraScreen() {
 }
 
 @Composable
-private fun CameraPreview(modifier: Modifier, controller: Camera2Controller, ready: Boolean) {
+private fun CameraPreview(modifier: Modifier, controller: Camera2Controller, ready: Boolean, grid: PreviewGrid) {
     Box(modifier = modifier.background(androidx.compose.ui.graphics.Color.Black)) {
         AndroidView(
             modifier = Modifier.fillMaxSize().pointerInput(controller) {

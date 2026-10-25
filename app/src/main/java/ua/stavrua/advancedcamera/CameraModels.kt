@@ -14,6 +14,10 @@ data class CameraOption(
     val rawSizes: List<Size>,
 ) {
     val supportsRaw: Boolean get() = rawSizes.isNotEmpty()
+    val flashAvailable: Boolean
+        get() = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+    val maxDigitalZoom: Float
+        get() = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)?.coerceAtLeast(1f) ?: 1f
     val manualSensor: Boolean
         get() = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
             ?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) == true
@@ -60,6 +64,18 @@ enum class WhiteBalance(val title: String) {
     CUSTOM("Custom Kelvin"),
 }
 
+enum class FlashMode(val title: String) {
+    OFF("Off"),
+    AUTO("Auto"),
+    ON("On"),
+}
+
+enum class PreviewGrid(val title: String) {
+    OFF("Off"),
+    THIRDS("Rule of thirds"),
+    CROSSHAIR("Crosshair"),
+}
+
 data class CameraSettings(
     val exposureCompensation: Int = 0,
     val iso: Int = 400,
@@ -72,6 +88,9 @@ data class CameraSettings(
     val format: FileFormat = FileFormat.JPEG,
     val aspectRatio: AspectRatioChoice = AspectRatioChoice.RATIO_4_3,
     val selectedSize: Size? = null,
+    val zoom: Float = 1f,
+    val flashMode: FlashMode = FlashMode.OFF,
+    val captureTimerSeconds: Int = 0,
     val watermarkEnabled: Boolean = true,
     val watermarkScale: Float = 1f,
     val watermarkOpacity: Float = 0.88f,
