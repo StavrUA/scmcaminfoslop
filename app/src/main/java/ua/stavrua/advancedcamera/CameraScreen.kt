@@ -19,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -71,6 +72,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlin.math.roundToInt
@@ -204,6 +206,9 @@ fun CameraScreen() {
     val settings = ui.settings
     var showOverlayFields by remember { mutableStateOf(false) }
     var previewGrid by remember { mutableStateOf(PreviewGrid.OFF) }
+    var showLevelGuide by remember { mutableStateOf(true) }
+    val currentZoom by rememberUpdatedState(settings.zoom)
+    val maximumZoom by rememberUpdatedState(camera?.maxDigitalZoom ?: 1f)
 
     fun saveOverlayConfig(updated: OverlayConfig) {
         try {
@@ -236,6 +241,13 @@ fun CameraScreen() {
             controller = controller,
             ready = ui.isReady,
             grid = previewGrid,
+            rollRadians = orientation?.getOrNull(2),
+            showLevelGuide = showLevelGuide,
+            onPinchZoom = { scale ->
+                if (maximumZoom > 1f) {
+                    controller.setZoom((currentZoom * scale).coerceIn(1f, maximumZoom))
+                }
+            },
         )
         Column(
             modifier = Modifier
@@ -306,6 +318,13 @@ fun CameraScreen() {
                     options = PreviewGrid.entries.map { it.title to it.name },
                     modifier = Modifier.weight(1f),
                     onSelect = { previewGrid = PreviewGrid.valueOf(it) },
+                )
+                DropdownField(
+                    label = "Level",
+                    selected = if (showLevelGuide) "On" else "Off",
+                    options = listOf("On" to "on", "Off" to "off"),
+                    modifier = Modifier.weight(1f),
+                    onSelect = { showLevelGuide = it == "on" },
                 )
             }
             if (camera != null && camera.maxDigitalZoom > 1f) {
@@ -604,14 +623,29 @@ fun CameraScreen() {
 }
 
 @Composable
-private fun CameraPreview(modifier: Modifier, controller: Camera2Controller, ready: Boolean, grid: PreviewGrid) {
+private fun CameraPreview(
+    modifier: Modifier,
+    controller: Camera2Controller,
+    ready: Boolean,
+    grid: PreviewGrid,
+    rollRadians: Float?,
+    showLevelGuide: Boolean,
+    onPinchZoom: (Float) -> Unit,
+) {
+    val latestPinchZoom by rememberUpdatedState(onPinchZoom)
     Box(modifier = modifier.background(androidx.compose.ui.graphics.Color.Black)) {
         AndroidView(
-            modifier = Modifier.fillMaxSize().pointerInput(controller) {
-                detectTapGestures { offset ->
-                    controller.tapToFocus(offset.x, offset.y, size.width, size.height)
+            modifier = Modifier.fillMaxSize()
+                .pointerInput(controller) {
+                    detectTapGestures { offset ->
+                        controller.tapToFocus(offset.x, offset.y, size.width, size.height)
+                    }
                 }
-            },
+                .pointerInput(controller) {
+                    detectTransformGestures { _, _, zoomChange, _ ->
+                        if (zoomChange != 1f) latestPinchZoom(zoomChange)
+                    }
+                },
             factory = { context ->
                 SurfaceView(context).also { view ->
                     view.holder.addCallback(controller)
@@ -634,6 +668,36 @@ private fun CameraPreview(modifier: Modifier, controller: Camera2Controller, rea
                     val arm = 20.dp.toPx()
                     drawLine(color, Offset(center.x - arm, center.y), Offset(center.x + arm, center.y), strokeWidth, cap = StrokeCap.Round)
                     drawLine(color, Offset(center.x, center.y - arm), Offset(center.x, center.y + arm), strokeWidth, cap = StrokeCap.Round)
+                }
+            }
+            if (showLevelGuide && rollRadians != null) {
+                Canvas(Modifier.align(Alignment.Center).size(width = 150.dp, height = 40.dp)) {
+                    val rollDegrees = Math.toDegrees(rollRadians.toDouble()).toFloat()
+                    val levelColor = if (kotlin.math.abs(rollDegrees) < 1.5f) Color(0xFF66BB6A) else Color(0xFFFF7043)
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val halfLength = size.width * 0.38f
+                    rotate(rollDegrees, center) {
+                        drawLine(
+                            levelColor.copy(alpha = 0.9f),
+                            Offset(center.x - halfLength, center.y),
+                            Offset(center.x + halfLength, center.y),
+                            3.dp.toPx(),
+                            cap = StrokeCap.Round,
+                        )
+                        drawCircle(levelColor, 5.dp.toPx(), center)
+                        drawLine(
+                            Color.White.copy(alpha = 0.8f),
+                            Offset(center.x - halfLength, center.y - 8.dp.toPx()),
+                            Offset(center.x - halfLength, center.y + 8.dp.toPx()),
+                            2.dp.toPx(),
+                        )
+                        drawLine(
+                            Color.White.copy(alpha = 0.8f),
+                            Offset(center.x + halfLength, center.y - 8.dp.toPx()),
+                            Offset(center.x + halfLength, center.y + 8.dp.toPx()),
+                            2.dp.toPx(),
+                        )
+                    }
                 }
             }
         }

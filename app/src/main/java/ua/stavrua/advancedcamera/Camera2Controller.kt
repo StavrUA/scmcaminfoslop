@@ -182,6 +182,10 @@ class Camera2Controller(
         ) restartSession()
     }
 
+    fun setZoom(zoom: Float) {
+        updateSettings(state.settings.copy(zoom = zoom))
+    }
+
     fun tapToFocus(x: Float, y: Float, width: Int, height: Int) {
         val option = selectedOption() ?: return
         val chars = option.characteristics
