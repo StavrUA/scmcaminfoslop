@@ -35,6 +35,7 @@ import android.provider.MediaStore
 import android.util.Size
 import android.view.Surface
 import android.view.SurfaceHolder
+import androidx.heifwriter.HeifWriter
 import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
 import java.io.ByteArrayInputStream
@@ -702,12 +703,17 @@ class Camera2Controller(
                             val bitmap = outputBitmap
                                 ?: throw IllegalStateException("Image processing did not produce a bitmap.")
                             val quality = if (imageFormat == FileFormat.PNG) 100 else settings.imageQuality
-                            val compressFormat = when (imageFormat) {
-                                FileFormat.PNG -> Bitmap.CompressFormat.PNG
-                                FileFormat.HEIC -> Bitmap.CompressFormat.HEIC
-                                else -> Bitmap.CompressFormat.JPEG
+                            when (imageFormat) {
+                                FileFormat.HEIC -> writeHeic(bitmap, quality, stream)
+                                else -> {
+                                    val compressFormat = if (imageFormat == FileFormat.PNG) {
+                                        Bitmap.CompressFormat.PNG
+                                    } else {
+                                        Bitmap.CompressFormat.JPEG
+                                    }
+                                    check(bitmap.compress(compressFormat, quality, stream)) { "Bitmap encoding failed." }
+                                }
                             }
-                            check(bitmap.compress(compressFormat, quality, stream)) { "Bitmap encoding failed." }
                         }
                     }
                     savedCount++
@@ -802,6 +808,29 @@ class Camera2Controller(
             Paint(Paint.ANTI_ALIAS_FLAG).apply { colorFilter = ColorMatrixColorFilter(saturation) },
         )
         return adjusted
+    }
+
+    private fun writeHeic(bitmap: Bitmap, quality: Int, output: OutputStream) {
+        val temporaryFile = java.io.File.createTempFile("advanced-camera-", ".heic", appContext.cacheDir)
+        try {
+            HeifWriter.Builder(
+                temporaryFile.absolutePath,
+                bitmap.width,
+                bitmap.height,
+                HeifWriter.INPUT_MODE_BITMAP,
+            )
+                .setQuality(quality.coerceIn(5, 100))
+                .setGridEnabled(false)
+                .build()
+                .use { writer ->
+                    writer.start()
+                    writer.addBitmap(bitmap)
+                    writer.stop(10_000)
+                }
+            temporaryFile.inputStream().use { input -> input.copyTo(output) }
+        } finally {
+            temporaryFile.delete()
+        }
     }
 
     private fun cropToAspect(source: Bitmap, targetRatio: Float): Bitmap {
