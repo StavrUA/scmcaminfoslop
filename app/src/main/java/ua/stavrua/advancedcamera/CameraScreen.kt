@@ -102,25 +102,6 @@ fun CameraScreen() {
             ambientTemperatureProvider = { latestAmbientTemperature },
             displayRotationProvider = { context.activityDisplayRotation() },
         )
-        if (grid != PreviewGrid.OFF) {
-            Canvas(Modifier.fillMaxSize()) {
-                val color = Color.White.copy(alpha = 0.72f)
-                val strokeWidth = 1.dp.toPx()
-                if (grid == PreviewGrid.THIRDS) {
-                    val verticalStep = size.width / 3f
-                    val horizontalStep = size.height / 3f
-                    for (index in 1..2) {
-                        drawLine(color, Offset(verticalStep * index, 0f), Offset(verticalStep * index, size.height), strokeWidth)
-                        drawLine(color, Offset(0f, horizontalStep * index), Offset(size.width, horizontalStep * index), strokeWidth)
-                    }
-                } else {
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val arm = 20.dp.toPx()
-                    drawLine(color, Offset(center.x - arm, center.y), Offset(center.x + arm, center.y), strokeWidth, cap = StrokeCap.Round)
-                    drawLine(color, Offset(center.x, center.y - arm), Offset(center.x, center.y + arm), strokeWidth, cap = StrokeCap.Round)
-                }
-            }
-        }
     }
     val cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     var hasCameraPermission by remember { mutableStateOf(cameraGranted) }
@@ -637,6 +618,25 @@ private fun CameraPreview(modifier: Modifier, controller: Camera2Controller, rea
                 }
             },
         )
+        if (grid != PreviewGrid.OFF) {
+            Canvas(Modifier.fillMaxSize()) {
+                val color = Color.White.copy(alpha = 0.72f)
+                val strokeWidth = 1.dp.toPx()
+                if (grid == PreviewGrid.THIRDS) {
+                    val verticalStep = size.width / 3f
+                    val horizontalStep = size.height / 3f
+                    for (index in 1..2) {
+                        drawLine(color, Offset(verticalStep * index, 0f), Offset(verticalStep * index, size.height), strokeWidth)
+                        drawLine(color, Offset(0f, horizontalStep * index), Offset(size.width, horizontalStep * index), strokeWidth)
+                    }
+                } else {
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    val arm = 20.dp.toPx()
+                    drawLine(color, Offset(center.x - arm, center.y), Offset(center.x + arm, center.y), strokeWidth, cap = StrokeCap.Round)
+                    drawLine(color, Offset(center.x, center.y - arm), Offset(center.x, center.y + arm), strokeWidth, cap = StrokeCap.Round)
+                }
+            }
+        }
         if (!ready) {
             Text(
                 "Camera preview",
